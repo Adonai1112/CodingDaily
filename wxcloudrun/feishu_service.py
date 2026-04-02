@@ -1,57 +1,49 @@
 import json
 import time
 import requests
-import lark_oapi as lark
-from lark_oapi import Client
+import urllib3
+
+urllib3.disable_warnings()
 
 # 飞书配置
 FEISHU_APP_ID = "cli_a9387bd30a38dcef"
 FEISHU_APP_SECRET = "nhW0zacGRkbMT1BVwbQ5IiHqEEoWEGfI"
-FEISHU_CHAT_ID = "oc_46287e9324ccb3a4d5f64ee920c79142"
-
-# 初始化飞书客户端
-client = Client.builder() \
-    .app_id(FEISHU_APP_ID) \
-    .app_secret(FEISHU_APP_SECRET) \
-    .build()
+FEISHU_CHAT_ID = "oc_d45999fdd3504c9567c52cea710a5314"
 
 
-def create_topic(topic_name: str) -> str:
-    """创建话题并返回话题ID"""
-    try:
-        response = client.im.v1.chats[f"{FEISHU_CHAT_ID}"].topics.post(
-            lark.CreateChatTopicRequest(
-                name=topic_name,
-                topic_mode="普通话题"
-            )
-        )
+def get_feishu_token():
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    data = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
+    resp = requests.post(url, json=data, verify=False)
+    if resp.status_code == 200:
+        result = resp.json()
+        if "tenant_access_token" in result:
+            return result["tenant_access_token"]
+    print(f"获取飞书token失败: {resp.text}")
+    return None
 
-        if response.code == 0:
-            topic_id = response.data.topic.topic_id
-            print(f"话题创建成功: {topic_name}, topic_id: {topic_id}")
-            return topic_id
-        else:
-            print(f"创建话题失败: {response.msg}")
-            return None
-    except Exception as e:
-        print(f"创建话题异常: {e}")
+
+def upload_image(image_data) -> str:
+    """上传图片到飞书并返回 image_key"""
+    token = get_feishu_token()
+    if not token:
         return None
 
+    headers = {"Authorization": f"Bearer {token}"}
 
-def upload_image(image_data: bytes) -> str:
-    """上传图片到飞书并返回 image_key"""
     try:
-        response = client.im.v1.images.post(
-            lark.CreateImageRequest(
-                image_type="message",
-                image=image_data
-            )
+        resp = requests.post(
+            "https://open.feishu.cn/open-apis/im/v1/images",
+            headers=headers,
+            data={"image_type": "message"},
+            files={"image": ("Image.jpg", image_data, "image/jpeg")},
+            verify=False
         )
-
-        if response.code == 0:
-            return response.data.image_key
+        result = resp.json()
+        if result.get("code") == 0:
+            return result["data"]["image_key"]
         else:
-            print(f"上传图片失败: {response.msg}")
+            print(f"上传图片失败: {result.get('msg')}")
             return None
     except Exception as e:
         print(f"上传图片异常: {e}")
@@ -59,125 +51,93 @@ def upload_image(image_data: bytes) -> str:
 
 
 def send_image_message(chat_id: str, image_key: str):
-    """发送图片消息到指定话题"""
-    try:
-        response = client.im.v1.messages.create(
-            lark.CreateMessageRequest(
-                receive_id_type="chat_id",
-                lark.CreateMessageRequestBody(
-                    receive_id=chat_id,
-                    msg_type="image",
-                    content=json.dumps({"image_key": image_key})
-                )
-            )
-        )
+    """发送图片消息"""
+    token = get_feishu_token()
+    if not token:
+        return
 
-        if response.code == 0:
-            print(f"图片消息发送成功")
+    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    data = {"receive_id": chat_id, "msg_type": "image", "content": json.dumps({"Image_key": image_key})}
+
+    try:
+        resp = requests.post(url, headers=headers, json=data, verify=False)
+        result = resp.json()
+        if result.get("code") == 0:
+            print("图片消息发送成功")
         else:
-            print(f"发送图片消息失败: {response.msg}")
+            print(f"发送图片消息失败: {result.get('msg')}")
     except Exception as e:
         print(f"发送图片消息异常: {e}")
 
 
-def send_card_message(chat_id: str, title: str, description: str, url: str, image_url: str = None):
-    """发送富文本卡片消息"""
+def send_text_message(chat_id: str, text: str):
+    """发送文本消息"""
+    token = get_feishu_token()
+    if not token:
+        return
+
+    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    data = {"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text})}
+
     try:
-        elements = [
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "plain_text",
-                    "content": f"📝 {title}"
-                }
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "markdown",
-                    "content": description
-                }
-            }
-        ]
-
-        if url:
-            elements.append({
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "查看原文"
-                        },
-                        "type": "primary",
-                        "url": url
-                    }
-                ]
-            })
-
-        card = {
-            "config": {"wide_screen_mode": True},
-            "elements": elements
-        }
-
-        response = client.im.v1.messages.create(
-            lark.CreateMessageRequest(
-                receive_id_type="chat_id",
-                lark.CreateMessageRequestBody(
-                    receive_id=chat_id,
-                    msg_type="interactive",
-                    content=json.dumps(card)
-                )
-            )
-        )
-
-        if response.code == 0:
-            print(f"卡片消息发送成功")
+        resp = requests.post(url, headers=headers, json=data, verify=False)
+        result = resp.json()
+        if result.get("code") == 0:
+            print("文本消息发送成功")
         else:
-            print(f"发送卡片消息失败: {response.msg}")
+            print(f"发送文本消息失败: {result.get('msg')}")
+    except Exception as e:
+        print(f"发送文本消息异常: {e}")
+
+
+def send_card_message(chat_id: str, title: str, description: str, url: str = ""):
+    """发送卡片消息"""
+    token = get_feishu_token()
+    if not token:
+        return
+
+    api_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    elements = [
+        {"tag": "div", "text": {"tag": "plain_text", "content": f"📝 {title}"}},
+        {"tag": "div", "text": {"tag": "markdown", "content": description}}
+    ]
+
+    if url:
+        elements.append({"tag": "action", "actions": [
+            {"tag": "button", "text": {"tag": "plain_text", "content": "查看原文"}, "type": "primary", "url": url}]})
+
+    card = {"config": {"wide_screen_mode": True}, "elements": elements}
+    data = {"receive_id": chat_id, "msg_type": "interactive", "content": json.dumps(card)}
+
+    try:
+        resp = requests.post(api_url, headers=headers, json=data, verify=False)
+        result = resp.json()
+        if result.get("code") == 0:
+            print("卡片消息发送成功")
+        else:
+            print(f"发送卡片消息失败: {result.get('msg')}")
     except Exception as e:
         print(f"发送卡片消息异常: {e}")
 
 
 def send_to_feishu_topic(msg_type: str, content: dict):
-    """统一发送到飞书话题"""
+    """直接发送到飞书群（会自动创建话题）"""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    topic_name = f"消息 {timestamp}"
-
-    # 创建话题
-    topic_id = create_topic(topic_name)
-    if not topic_id:
-        print("无法创建话题，发送失败")
-        return False
 
     if msg_type == "image":
-        # 发送图片
         image_key = content.get("image_key")
         if image_key:
-            send_image_message(topic_id, image_key)
-
+            send_image_message(FEISHU_CHAT_ID, image_key)
     elif msg_type == "news":
-        # 发送图文卡片
         title = content.get("title", "图文消息")
         description = content.get("description", "")
         url = content.get("url", "")
-        send_card_message(topic_id, title, description, url)
-
+        send_card_message(FEISHU_CHAT_ID, title, description, url)
     elif msg_type == "text":
-        # 发送文本
-        try:
-            response = client.im.v1.messages.create(
-                lark.CreateMessageRequest(
-                    receive_id_type="chat_id",
-                    lark.CreateMessageRequestBody(
-                        receive_id=topic_id,
-                        msg_type="text",
-                        content=json.dumps({"text": content.get("text", "")})
-                    )
-                )
-            )
-        except Exception as e:
-            print(f"发送文本消息异常: {e}")
+        send_text_message(FEISHU_CHAT_ID, content.get("text", ""))
 
     return True

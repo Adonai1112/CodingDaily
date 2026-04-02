@@ -3,7 +3,6 @@ import requests
 import xml.etree.ElementTree as ET
 import hashlib
 import time
-import io
 from flask import make_response, request
 from wxcloudrun import app
 from wxcloudrun import feishu_service
@@ -11,7 +10,7 @@ from wxcloudrun import feishu_service
 
 def wechat():
     if request.method == 'GET':
-        token = os.environ.get('WECHAT_TOKEN')
+        token = os.environ.get('WECHAT_TOKEN') or 'abc123'
         signature = request.args.get('signature')
         timestamp = request.args.get('timestamp')
         nonce = request.args.get('nonce')
@@ -38,29 +37,20 @@ def wechat():
         if msg_type == 'text':
             content = root.find('Content').text
             print(f"收到文本消息: {content}")
-
-            # 发送到飞书话题
             feishu_service.send_to_feishu_topic("text", {"text": content})
-
-            # 回复确认
             return reply_text(root, "已收到文本消息")
 
         elif msg_type == 'image':
             media_id = root.find('MediaId').text
             print(f"收到图片消息，MediaId: {media_id}")
-
-            # 下载图片
             image_data = get_image_from_wechat(media_id)
             if image_data:
-                # 上传到飞书
                 image_key = feishu_service.upload_image(image_data)
                 if image_key:
                     feishu_service.send_to_feishu_topic("image", {"image_key": image_key})
-
             return reply_text(root, "已收到图片")
 
         elif msg_type == 'news':
-            # 图文消息
             articles = []
             for item in root.findall('.//item'):
                 article = {
@@ -72,11 +62,8 @@ def wechat():
                 articles.append(article)
 
             print(f"收到图文消息，共 {len(articles)} 篇文章")
-
-            # 发送到飞书
             for article in articles:
                 feishu_service.send_to_feishu_topic("news", article)
-
             return reply_text(root, "已收到图文消息")
 
         return "success"

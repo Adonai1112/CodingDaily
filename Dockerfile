@@ -17,7 +17,7 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tencent.com/g' /etc/apk/repositorie
 && rm -rf /var/cache/apk/*
 
 # 拷贝当前项目到/app目录下（.dockerignore中文件除外）
-COPY wxcloudrun-flask-main /app
+COPY . /app
 
 # 设定当前的工作目录
 WORKDIR /app
