@@ -3,9 +3,10 @@ import requests
 import xml.etree.ElementTree as ET
 import hashlib
 import time
-import base64
-from flask import make_response
-from. import app
+import io
+from flask import make_response, request
+from wxcloudrun import app
+from wxcloudrun import feishu_service
 
 
 def wechat():
@@ -20,7 +21,7 @@ def wechat():
         tmp_list = [token, timestamp, nonce]
         tmp_list.sort()
         tmp_str = ''.join(tmp_list)
-        tmp_str = hashlib.sha1(tmp_str.encode('utf - 8')).hexdigest()
+        tmp_str = hashlib.sha1(tmp_str.encode('utf-8')).hexdigest()
 
         if tmp_str == signature:
             return echostr
@@ -32,114 +33,106 @@ def wechat():
         root = ET.fromstring(xml_data)
 
         msg_type = root.find('MsgType').text
+        print(f"收到消息类型: {msg_type}")
+
         if msg_type == 'text':
             content = root.find('Content').text
             print(f"收到文本消息: {content}")
 
-            # 发送文本消息到飞书
-            send_text_to_feishu(content)
+            # 发送到飞书话题
+            feishu_service.send_to_feishu_topic("text", {"text": content})
 
-            # 回复文本消息
-            reply_text = """
-            <xml>
-            <ToUserName><![CDATA[{}]]></ToUserName>
-            <FromUserName><![CDATA[{}]]></FromUserName>
-            <CreateTime>{}</CreateTime>
-            <MsgType><![CDATA[text]]></MsgType>
-            <Content><![CDATA[你发送的是文本消息：{}]]></Content>
-            </xml>
-            """.format(root.find('FromUserName').text, root.find('ToUserName').text,
-                       int(time.time()), content)
-            response = make_response(reply_text)
-            response.content_type = 'text/xml'
-            return response
+            # 回复确认
+            return reply_text(root, "已收到文本消息")
 
         elif msg_type == 'image':
             media_id = root.find('MediaId').text
             print(f"收到图片消息，MediaId: {media_id}")
 
-            # 获取图片并发送到飞书
+            # 下载图片
             image_data = get_image_from_wechat(media_id)
-            feishu_webhook_url = app.config.get('FEISHU_WEBHOOK_URL')
-            if feishu_webhook_url:
-                send_image_to_feishu(image_data, feishu_webhook_url)
-            else:
-                print("未配置飞书 Webhook 地址")
+            if image_data:
+                # 上传到飞书
+                image_key = feishu_service.upload_image(image_data)
+                if image_key:
+                    feishu_service.send_to_feishu_topic("image", {"image_key": image_key})
+
+            return reply_text(root, "已收到图片")
+
+        elif msg_type == 'news':
+            # 图文消息
+            articles = []
+            for item in root.findall('.//item'):
+                article = {
+                    "title": item.find('Title').text or "",
+                    "description": item.find('Description').text or "",
+                    "pic_url": item.find('PicUrl').text or "",
+                    "url": item.find('Url').text or ""
+                }
+                articles.append(article)
+
+            print(f"收到图文消息，共 {len(articles)} 篇文章")
+
+            # 发送到飞书
+            for article in articles:
+                feishu_service.send_to_feishu_topic("news", article)
+
+            return reply_text(root, "已收到图文消息")
+
+        return "success"
 
 
-def send_text_to_feishu(text):
-    feishu_webhook_url = app.config.get('FEISHU_WEBHOOK_URL')
-    if feishu_webhook_url:
-        headers = {'Content-Type': 'application/json'}
-        data = {"msg_type": "text", "content": {"text": text}}
-        try:
-            response = requests.post(feishu_webhook_url, json=data, headers=headers)
-            if response.status_code!= 200:
-                print(f"发送文本消息到飞书失败: {response.text}")
-        except requests.exceptions.RequestException as e:
-            print(f"发送文本消息到飞书时发生网络错误: {e}")
-    else:
-        print("未配置飞书 Webhook 地址")
+def reply_text(root, content):
+    """回复文本消息"""
+    reply_text = f"""<xml>
+<ToUserName><![CDATA[{root.find('FromUserName').text}]]></ToUserName>
+<FromUserName><![CDATA[{root.find('ToUserName').text}]]></FromUserName>
+<CreateTime>{int(time.time())}</CreateTime>
+<MsgType><![CDATA[text]]></MsgType>
+<Content><![CDATA[{content}]]></Content>
+</xml>"""
+    response = make_response(reply_text)
+    response.content_type = 'text/xml'
+    return response
 
 
 def get_image_from_wechat(media_id):
+    """从微信获取图片数据"""
     access_token = get_wechat_access_token()
-    if access_token:
-        url = f"https://api.weixin.qq.com/cgi-bin/media/get?access_token={access_token}&media_id={media_id}"
-
-        try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                image_data = response.content
-                return image_data
-            else:
-                print(f"获取图片失败: {response.text}")
-        except requests.exceptions.RequestException as e:
-            print(f"获取图片时发生网络错误: {e}")
-    else:
-        print("获取微信 access token 失败，无法获取图片")
+    if not access_token:
         return None
+
+    url = f"https://api.weixin.qq.com/cgi-bin/media/get?access_token={access_token}&media_id={media_id}"
+
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.content
+        else:
+            print(f"获取图片失败: {response.text}")
+    except Exception as e:
+        print(f"获取图片异常: {e}")
+
+    return None
 
 
 def get_wechat_access_token():
+    """获取微信 Access Token"""
     app_id = os.environ.get('WECHAT_APP_ID')
     app_secret = os.environ.get('WECHAT_APP_SECRET')
 
-    if app_id and app_secret:
-        url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
-
-        try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                data = response.json()
-                return data.get('access_token')
-            else:
-                print(f"获取微信 access token 失败: {response.text}")
-        except requests.exceptions.RequestException as e:
-            print(f"获取微信 access token 时发生网络错误: {e}")
-    else:
-        print("未配置微信 APP ID 或 APP Secret，无法获取 access token")
+    if not app_id or not app_secret:
+        print("未配置微信 APP ID 或 APP Secret")
         return None
 
+    url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
 
-def send_image_to_feishu(image_data, feishu_webhook_url):
-    if image_data and feishu_webhook_url:
-        image_base64 = base64.b64encode(image_data).decode('utf - 8')
-        headers = {'Content-Type': 'application/json'}
-        data = {
-            "msg_type": "image",
-            "content": {
-                "image_key": image_base64
-            }
-        }
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('access_token')
+    except Exception as e:
+        print(f"获取 access token 异常: {e}")
 
-        try:
-            response = requests.post(feishu_webhook_url, json=data, headers=headers)
-            if response.status_code!= 200:
-                print(f"发送图片消息到飞书失败: {response.text}")
-        except requests.exceptions.RequestException as e:
-            print(f"发送图片消息到飞书时发生网络错误: {e}")
-    elif not feishu_webhook_url:
-        print("未配置飞书 Webhook 地址")
-    else:
-        print("没有图片数据可发送")
+    return None

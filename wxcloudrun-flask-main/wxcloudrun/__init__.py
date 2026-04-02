@@ -2,6 +2,10 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 import pymysql
 import config
+import os
+from flask import Flask
+...
+
 
 # 因 MySQLDB 不支持 Python3，使用 pymysql 扩展库代替 MySQLDB 库
 pymysql.install_as_MySQLdb()
