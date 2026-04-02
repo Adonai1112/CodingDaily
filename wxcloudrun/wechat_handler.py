@@ -16,7 +16,6 @@ def wechat():
         nonce = request.args.get('nonce')
         echostr = request.args.get('echostr')
 
-        # 验证消息来自微信服务器
         tmp_list = [token, timestamp, nonce]
         tmp_list.sort()
         tmp_str = ''.join(tmp_list)
@@ -60,7 +59,6 @@ def wechat():
                     "url": item.find('Url').text or ""
                 }
                 articles.append(article)
-
             print(f"收到图文消息，共 {len(articles)} 篇文章")
             for article in articles:
                 feishu_service.send_to_feishu_topic("news", article)
@@ -87,16 +85,27 @@ def get_image_from_wechat(media_id):
     """从微信获取图片数据"""
     access_token = get_wechat_access_token()
     if not access_token:
+        print("获取图片失败: 无法获取微信 access_token")
         return None
 
     url = f"https://api.weixin.qq.com/cgi-bin/media/get?access_token={access_token}&media_id={media_id}"
+    print(f"正在从微信获取图片...")
 
     try:
-        response = requests.get(url)
+        response = requests.get(url, verify=False)
+        content_type = response.headers.get('Content-Type', '')
+        print(f"微信响应 Content-Type: {content_type}")
+
         if response.status_code == 200:
+            # 检查是否返回的是错误JSON而不是图片
+            if 'application/json' in content_type:
+                error_data = response.json()
+                print(f"获取图片失败(微信返回错误): {error_data}")
+                return None
+            print(f"获取图片成功，数据大小: {len(response.content)} bytes")
             return response.content
         else:
-            print(f"获取图片失败: {response.text}")
+            print(f"获取图片失败: HTTP {response.status_code}")
     except Exception as e:
         print(f"获取图片异常: {e}")
 
@@ -113,13 +122,30 @@ def get_wechat_access_token():
         return None
 
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
+    print(f"请求微信 access_token, URL: {url[:80]}...")
 
     try:
         response = requests.get(url)
+        print(f"微信 token 响应状态: {response.status_code}")
+        print(f"微信 token 响应内容: {response.text}")
+
         if response.status_code == 200:
             data = response.json()
-            return data.get('access_token')
+            print(f"微信 token JSON: {data}")
+
+            # 检查是否有错误
+            if 'errcode' in data and data['errcode'] != 0:
+                print(f"微信 API 错误: errcode={data['errcode']}, errmsg={data.get('errmsg')}")
+                return None
+
+            token = data.get('access_token')
+            if token:
+                print(f"获取微信 access_token 成功，长度: {len(token)}")
+                return token
+            else:
+                print(f"获取 access_token 失败: 字段不存在")
     except Exception as e:
         print(f"获取 access token 异常: {e}")
 
     return None
+
