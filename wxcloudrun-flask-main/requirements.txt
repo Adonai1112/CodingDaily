@@ -12,3 +12,5 @@ flask
 flask-sqlalchemy
 pymysql
 feishu_api
+requests>=2.31.0
+lark-oapi>=1.0.0
