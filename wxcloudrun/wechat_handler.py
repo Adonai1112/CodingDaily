@@ -16,6 +16,9 @@ def wechat():
         nonce = request.args.get('nonce')
         echostr = request.args.get('echostr')
 
+        if not all([signature, timestamp, nonce, echostr]):
+            return '参数缺失'
+
         tmp_list = [token, timestamp, nonce]
         tmp_list.sort()
         tmp_str = ''.join(tmp_list)
@@ -35,8 +38,9 @@ def wechat():
 
         if msg_type == 'text':
             content = root.find('Content').text
-            print(f"收到文本消息: {content}")
-            feishu_service.send_to_feishu_topic("text", {"text": content})
+            if content:
+                print(f"收到文本消息: {content}")
+                feishu_service.send_to_feishu_topic("text", {"text": content})
             return reply_text(root, "已收到文本消息")
 
         elif msg_type == 'image':
@@ -48,6 +52,13 @@ def wechat():
                 if image_key:
                     feishu_service.send_to_feishu_topic("image", {"image_key": image_key})
             return reply_text(root, "已收到图片")
+
+        elif msg_type == 'emoji':
+            content = root.find('Content').text
+            emoji_md5 = root.find('EmojiMd5').text if root.find('EmojiMd5') is not None else ""
+            print(f"收到表情包消息: {content}, emoji_md5: {emoji_md5}")
+            feishu_service.send_to_feishu_topic("text", {"text": "📨 收到一个微信表情包"})
+            return reply_text(root, "已收到表情包")
 
         elif msg_type == 'news':
             articles = []
@@ -64,7 +75,11 @@ def wechat():
                 feishu_service.send_to_feishu_topic("news", article)
             return reply_text(root, "已收到图文消息")
 
-        return "success"
+        else:
+            # 兜底处理：打印所有未处理的消息
+            print(f"收到未处理的消息类型: {msg_type}")
+            print(f"原始消息: {xml_data.decode('utf-8')}")
+            return reply_text(root, f"收到消息类型: {msg_type}")
 
 
 def reply_text(root, content):
@@ -97,7 +112,6 @@ def get_image_from_wechat(media_id):
         print(f"微信响应 Content-Type: {content_type}")
 
         if response.status_code == 200:
-            # 检查是否返回的是错误JSON而不是图片
             if 'application/json' in content_type:
                 error_data = response.json()
                 print(f"获取图片失败(微信返回错误): {error_data}")
@@ -122,30 +136,19 @@ def get_wechat_access_token():
         return None
 
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
-    print(f"请求微信 access_token, URL: {url[:80]}...")
 
     try:
         response = requests.get(url)
-        print(f"微信 token 响应状态: {response.status_code}")
-        print(f"微信 token 响应内容: {response.text}")
-
         if response.status_code == 200:
             data = response.json()
-            print(f"微信 token JSON: {data}")
-
-            # 检查是否有错误
             if 'errcode' in data and data['errcode'] != 0:
                 print(f"微信 API 错误: errcode={data['errcode']}, errmsg={data.get('errmsg')}")
                 return None
-
             token = data.get('access_token')
             if token:
-                print(f"获取微信 access_token 成功，长度: {len(token)}")
+                print(f"获取微信 access_token 成功")
                 return token
-            else:
-                print(f"获取 access_token 失败: 字段不存在")
     except Exception as e:
         print(f"获取 access token 异常: {e}")
 
     return None
-
