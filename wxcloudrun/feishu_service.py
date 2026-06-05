@@ -57,13 +57,11 @@ def upload_file(file_bytes, file_suffix="gif") -> str:
         return None
     headers = {"Authorization": f"Bearer {token}"}
     filename = f"temp.{file_suffix}"
-    # 新增data传参：file_type，gif/image/png/jpg统一填image
-    form_data = {"file_type": "image"}
     try:
         resp = requests.post(
-            "https://open.feishu.cn/open-apis/im/v1/files/upload",
+            "https://open.feishu.cn/open-apis/im/v1/files",  # ✅ 去掉 /upload
             headers=headers,
-            data=form_data, # 补上必填参数
+            data={"file_type": "stream", "file_name": filename},  # ✅ stream + file_name
             files={"file": (filename, file_bytes, "image/gif")},
             verify=False,
             timeout=30
