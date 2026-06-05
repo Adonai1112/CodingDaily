@@ -14,7 +14,7 @@ FEISHU_CHAT_ID = "oc_d45999fdd3504c9567c52cea710a5314"
 def get_feishu_token():
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     data = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
-    resp = requests.post(url, json=data, verify=False)
+    resp = requests.post(url, json=data, verify=False, timeout=10)
     if resp.status_code == 200:
         result = resp.json()
         if "tenant_access_token" in result:
@@ -24,7 +24,7 @@ def get_feishu_token():
 
 
 def upload_image(image_data) -> str:
-    """上传图片到飞书并返回 image_key"""
+    """上传图片到飞书（jpg/png专用）返回 image_key"""
     token = get_feishu_token()
     if not token:
         return None
@@ -37,7 +37,8 @@ def upload_image(image_data) -> str:
             headers=headers,
             data={"image_type": "message"},
             files={"image": ("Image.jpg", image_data, "image/jpeg")},
-            verify=False
+            verify=False,
+            timeout=20
         )
         result = resp.json()
         if result.get("code") == 0:
@@ -50,6 +51,34 @@ def upload_image(image_data) -> str:
         return None
 
 
+def upload_file(file_bytes, file_suffix="gif") -> str:
+    token = get_feishu_token()
+    if not token:
+        return None
+    headers = {"Authorization": f"Bearer {token}"}
+    filename = f"temp.{file_suffix}"
+    # 新增data传参：file_type，gif/image/png/jpg统一填image
+    form_data = {"file_type": "image"}
+    try:
+        resp = requests.post(
+            "https://open.feishu.cn/open-apis/im/v1/files/upload",
+            headers=headers,
+            data=form_data, # 补上必填参数
+            files={"file": (filename, file_bytes, "image/gif")},
+            verify=False,
+            timeout=30
+        )
+        res = resp.json()
+        if res.get("code") == 0:
+            return res["data"]["file_key"]
+        else:
+            print(f"文件上传失败:{res.get('msg')}")
+            return None
+    except Exception as e:
+        print(f"上传文件异常:{e}")
+        return None
+
+
 def send_image_message(chat_id: str, image_key: str):
     """发送图片消息"""
     token = get_feishu_token()
@@ -58,10 +87,10 @@ def send_image_message(chat_id: str, image_key: str):
 
     url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    data = {"receive_id": chat_id, "msg_type": "image", "content": json.dumps({"Image_key": image_key})}
+    data = {"receive_id": chat_id, "msg_type": "image", "content": json.dumps({"image_key": image_key})}
 
     try:
-        resp = requests.post(url, headers=headers, json=data, verify=False)
+        resp = requests.post(url, headers=headers, json=data, verify=False, timeout=15)
         result = resp.json()
         if result.get("code") == 0:
             print("图片消息发送成功")
@@ -69,6 +98,29 @@ def send_image_message(chat_id: str, image_key: str):
             print(f"发送图片消息失败: {result.get('msg')}")
     except Exception as e:
         print(f"发送图片消息异常: {e}")
+
+
+def send_file_message(chat_id: str, file_key: str):
+    """发送GIF/文件消息"""
+    token = get_feishu_token()
+    if not token:
+        return
+    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "receive_id": chat_id,
+        "msg_type": "file",
+        "content": json.dumps({"file_key": file_key})
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=payload, verify=False, timeout=15)
+        res = resp.json()
+        if res.get("code") == 0:
+            print("GIF动图发送成功")
+        else:
+            print(f"发送文件失败:{res.get('msg')}")
+    except Exception as e:
+        print(f"发送文件异常:{e}")
 
 
 def send_text_message(chat_id: str, text: str):
@@ -82,7 +134,7 @@ def send_text_message(chat_id: str, text: str):
     data = {"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text})}
 
     try:
-        resp = requests.post(url, headers=headers, json=data, verify=False)
+        resp = requests.post(url, headers=headers, json=data, verify=False, timeout=15)
         result = resp.json()
         if result.get("code") == 0:
             print("文本消息发送成功")
@@ -114,7 +166,7 @@ def send_card_message(chat_id: str, title: str, description: str, url: str = "")
     data = {"receive_id": chat_id, "msg_type": "interactive", "content": json.dumps(card)}
 
     try:
-        resp = requests.post(api_url, headers=headers, json=data, verify=False)
+        resp = requests.post(api_url, headers=headers, json=data, verify=False, timeout=15)
         result = resp.json()
         if result.get("code") == 0:
             print("卡片消息发送成功")
@@ -125,13 +177,15 @@ def send_card_message(chat_id: str, title: str, description: str, url: str = "")
 
 
 def send_to_feishu_topic(msg_type: str, content: dict):
-    """直接发送到飞书群（会自动创建话题）"""
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-
+    """统一分发发送：text/image/file/news"""
     if msg_type == "image":
         image_key = content.get("image_key")
         if image_key:
             send_image_message(FEISHU_CHAT_ID, image_key)
+    elif msg_type == "file":
+        file_key = content.get("file_key")
+        if file_key:
+            send_file_message(FEISHU_CHAT_ID, file_key)
     elif msg_type == "news":
         title = content.get("title", "图文消息")
         description = content.get("description", "")
